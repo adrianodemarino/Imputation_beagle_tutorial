@@ -1,7 +1,7 @@
 # Imputation beagle tutorial
 Throughout the protocol we assume Bash shell.
 
-All info taken from this link: https://www.protocols.io/run/genotype-imputation-workflow-v3-0-xbgfijw
+This is a tutorial forked from: https://www.protocols.io/run/genotype-imputation-workflow-v3-0-xbgfijw
 
 Split tutorial step by step.
 
