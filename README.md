@@ -7,7 +7,7 @@ Split tutorial step by step.
 
 1. Installation anaconda
 2. Installation software
-3. 
+3. Run imputation
 
 ## Create new env that we call imputation
 
