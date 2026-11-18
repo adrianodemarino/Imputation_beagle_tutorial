@@ -1,279 +1,214 @@
-# Imputation beagle tutorial
-Throughout the protocol we assume Bash shell.
+# Genotype imputation with Beagle 5.5
 
-This is a tutorial forked from: https://www.protocols.io/run/genotype-imputation-workflow-v3-0-xbgfijw
+> [!TIP]
+> There is a new tutorial for **[Selphi 2](https://github.com/omicsedge/selphi2)**, the phasing and imputation engine I work on:
+> **[Imputation_selphi2_tutorial](https://github.com/adrianodemarino/Imputation_selphi2_tutorial)**. Same data, same steps,
+> with Beagle and Selphi 2 side by side.
 
-Split tutorial step by step.
+This guide imputes chromosome 22 for 100 people from a simulated genotyping array, using the 1000 Genomes
+high-coverage reference panel and Beagle 5.5. Every command below was run as written; the numbers in the
+"what you should see" boxes come from that run (16 threads, Linux).
 
-1. Installation anaconda
-2. Installation software
-3. Run imputation
+1. [Install](#1-install)
+2. [Download the panel and the genetic map](#2-download-the-panel-and-the-genetic-map)
+3. [Prepare the panel, the test people and their "array"](#3-prepare-the-panel-the-test-people-and-their-array)
+4. [Convert the panel to bref3](#4-convert-the-panel-to-bref3)
+5. [Phase and impute](#5-phase-and-impute)
+6. [Read the output](#6-read-the-output)
+7. [Check the accuracy](#7-check-the-accuracy)
+8. [Your own data](#8-your-own-data)
 
-## Create new env that we call imputation
+## 1. Install
 
-`conda create -n imputation python=3.6 anaconda`
+You need Java 8 or later, bcftools 1.15 or later and the two Beagle jars.
 
-Activate your new env:
+```bash
+conda create -n imputation -c conda-forge -c bioconda bcftools openjdk
+conda activate imputation
 
-`conda activate imputation`
-
-Installation of the required pack/software:
-```
-conda install -c bioconda eagle
-conda install -c bioconda beagle
-conda install -c r r-base
-conda install -c bioconda bcftools
-conda install -c conda-forge r-data.table
-conda install -c conda-forge r-sm
-```
-
-## or Download and install the software packages
-
-Required software packages are listed below with the versions used in this protocol. However, using the latest versions is
-recommended.
-* BCFtools v1.7 (or later version) http://www.htslib.org/download/
-* R v3.4.1 (or later version) https://www.r-project.org/
-* R package data.table https://github.com/Rdatatable/data.table/wiki/Installation
-* R package sm https://cran.r-project.org/package=sm
-* Eagle v2.3.5 https://data.broadinstitute.org/alkesgroup/Eagle/
-* Beagle v4.1 beagle.27Jan18.7e1.jar https://faculty.washington.edu/browning/beagle/b4_1.html
-* Beagle bref bref.27Jan18.7e1.jar https://faculty.washington.edu/browning/beagle/bref.27Jan18.7e1.jar
-
-## Reference genome and genetic map files
- 
-Fasta files
-Homo Sapiens assembly hg38 version 0 is used and the required files are:
-Homo_sapiens_assembly38.fasta
-Homo_sapiens_assembly38.fasta.fai
-The files are available for downloading at Broad Insitute storage in Google cloud at: [hg38](https://console.cloud.google.com/storage/browser/broad-references/hg38/v0/?pli=1)
-
-
-1.2.2. Genetic map files for phasing with Eagle
-Genetic map file (all chromosomes in a single file) with recombination frequencies for GRCh38/hg38 are available for downloading at Eagle download page at:
-https://data.broadinstitute.org/alkesgroup/Eagle/downloads/tables/
-genetic_map_hg38_withX.txt.gz
-
-We have processed the file according to the command below in order to split it per chromosome with correct headers.
-The resulting files are saved as:
-eagle_chr#_b38.txt (where # is the chromosome number)
-
-```
-for CHR in {1..23}; do
-    zcat genetic_map_hg38_withX.txt.gz | \
-    grep ^${CHR} | \
-    sed '1ichr position COMBINED_rate(cM/Mb) Genetic_Map(cM)' \
-    > eagle_chr${CHR}_b38.map
-done
-```
-Note: Currently the chromosome notation in the Eagle genetic map files is only the chromosome number without 'chr' and chrX is '23'. Starting from Eagle v2.4, also chromosome notation with 'chr' tag is supported.
-
-
-1.2.3 Genetic map files for imputation with Beagle
-Genetic map files fro Beagle are available for downloading at Beagle download page at
-http://bochet.gcc.biostat.washington.edu/beagle/genetic_maps/
-plink.GRCh38.map.zip
-
-Unzip the files and change the chromosome notation from PLINK format (only number or X) to GRCh38/hg38 standard notation with 'chr' tag as follows:
-
-```
-# Unzip the files
-unzip plink.GRCh38.map.zip
-
-# Rename chromosome 23
-mv plink.chrX.GRCh38.map plink.chr23.GRCh38.map
-
-# Add 'chr' tag to the beginning of the line and 
-# store the output with suitable filename
-for CHR in {1..23}; do 
-    cat plink.chr${CHR}.GRCh38.map | \
-    sed 's/^/chr/' \
-    > beagle_chr${CHR}_b38.map
-done
+mkdir -p tools
+wget -P tools https://faculty.washington.edu/browning/beagle/beagle.27Feb25.75f.jar
+wget -P tools https://faculty.washington.edu/browning/beagle/bref3.27Feb25.75f.jar
 ```
 
-Note: For GRCh38/hg38, the chromosome notation in the Beagle genetic map files is 'chr#' and chromosome 23 is 'chrX'.
-1.3. Imputation reference panel files
- 
-1.3.1 Obtain the reference panel files
-For increased imputation accuracy, we recommend using a population-specific imputation reference panel, if available.
- 
-If population-specific reference data is not available, for instance 1000 Genomes Project (1000 GP) (www.nature.com/articles/nature15393) data can be used instead.
- 
-GRCh38/hg38 files are available at EBI 1000 genomes ftp site: ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/supporting/GRCh38_positions/
+The newest jar is always listed on the [Beagle page](https://faculty.washington.edu/browning/beagle/beagle.html).
 
-```
-wget http://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/supporting/GRCh38_positions/ALL.chr{{1..22},X}_GRCh38.genotypes.20170504.vcf.gz{,.tbi}
-```
-NOTE: 
-The reference panel files should contain: 
-* phased genotypes,
-* chromosome names with 'chr' and chromosome X as 'chrX', 
-* all variants as biallelic records,
-* only SNPs and INDELs,
-* only unique variants, 
-* non-missing data, 
-* chrX as diploid genotypes, and
-* only unique IDs
+## 2. Download the panel and the genetic map
 
-1.3.2 Minimum quality control
+The panel is the 1000 Genomes high-coverage release (3,202 people sequenced at 30x by the New York Genome
+Center, phased with SHAPEIT), on GRCh38. The map is Beagle's PLINK-format GRCh38 map.
 
-Here, we have piped most of the processing steps together in order to save significant amount of time by avoiding writing out multiple intermediate files. If your imputation reference panel does not require all the steps, modify the command accordingly.
+```bash
+KG=https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000G_2504_high_coverage
+PANEL=$KG/working/20220422_3202_phased_SNV_INDEL_SV/1kGP_high_coverage_Illumina.chr22.filtered.SNV_INDEL_SV_phased_panel.vcf.gz
 
-For 1000GP data:
-Generate a text file containing space-spearated old and new chromosome names. This is required to rename the numerical chromosome names with 'chr' tag. Apply the new chromosome names with 'bcftools annotate'.
-Remove the rare variants, here singletons and doubletons by setting AC threshold with 'bcftools view'.
-Split multiallelic sites to biallelic records with 'bcftools norm'.
-Keep only SNPs and INDELs with 'bcftools view'. Here, the 1000GP data included a tag VT in the INFO field and data contain also structural variants which should be excluded.
-Align the variants to reference genome with 'bcftools norm' in order to have the REF and ALT alleles in the shortest possible representation and to confirm that the REF allele matches the reference genome, additionally remove duplicate variants (-d none).
-After alignment, remove multiallelic records with 'bcftools view', since these are formed during the alignment if the REF does not match with the reference genome.
-Finally, remove sites containing missing data with 'bcftools view'.
+mkdir -p data maps
+wget -P data "$PANEL" "$PANEL.tbi"
+wget -P data "$KG/20130606_g1k_3202_samples_ped_population.txt"
 
-
-```
-# Generate a chromosome renaming file
-for CHR in {1..23} X ; do 
-    echo ${CHR} chr${CHR}
-done >> chr_names.txt
-
-# Multiple processing commands piped together
-for CHR in {1..22} X; do
-    bcftools annotate --rename-chrs chr_names.txt \
-        ALL.chr${CHR}_GRCh38.genotypes.20170504.vcf.gz -Ou | \
-    bcftools view -e 'INFO/AC<3 | INFO/AN-INFO/AC<3' -Ou | \
-    bcftools norm -m -any -Ou | \
-    bcftools view -i 'INFO/VT="SNP" | INFO/VT="INDEL"' -Ou | \
-    bcftools norm -f Homo_sapiens_assembly38.fasta -d none -Ou | \
-    bcftools view -m 2 -M 2 -Ou | \
-    bcftools view -g ^miss -Oz -o 1000GP_chr${CHR}.vcf.gz"
-done
-```
- 
-If multiallelic sites are present in your data, in order to preserve them throughout the protocol, set ID field with unique IDs e.g. in format CHR_POS_REF_ALT. (RSIDs might contain duplicates, when the multiallelic sites are decomposed.)
-
-```
-for CHR in {1..23}; do
-    bcftools annotate \
-    --set-id '%CHROM\_%POS\_%REF\_%ALT' \
-    panel_chr${CHR}.vcf.gz  \
-    -Oz -o panel_SNPID_chr${CHR}.vcf.gz
-done
+wget -P maps https://bochet.gcc.biostat.washington.edu/beagle/genetic_maps/plink.GRCh38.map.zip
+unzip -q maps/plink.GRCh38.map.zip -d maps
+MAP=maps/chr_in_chrom_field/plink.chrchr22.GRCh38.map    # yes, "chrchr22": the file uses chr22 inside
 ```
 
-1.3.3 Convert haploid genotypes to homozygous diploids
-Often chrX is represented as haploid genotypes for males, however, Beagle can only handle diploid genotypes. 
-The command here produces unphased diploid genotypes. But since the haploid genotypes are in diploid format as REF/REF or ALT/ALT, we can simply set the phase for those alleles with a simple sed replacement. 
+The zip has two copies of the map: `chr_in_chrom_field/` (chromosome written `chr22`, as in GRCh38 VCFs) and
+`no_chr_in_chrom_field/` (`22`). The chromosome name has to match your VCF.
 
-The chrX ploidy can be corrected as follow
+## 3. Prepare the panel, the test people and their "array"
 
-```
-# Fix the chromosome X ploidy to phased diploid
-# Requires a ploidy.txt file containing 
-# space-separated CHROM,FROM,TO,SEX,PLOIDY 
-echo "chrX 1 156040895 M 2" > ploidy.txt
-bcftools +fixploidy \
-    1000GP_chrX.vcf.gz -Ov -- -p ploidy.txt | \
-    sed 's#0/0#0\|0#g;s#1/1#1\|1#g' | \
-bcftools view -Oz -o 1000GP_chr23.vcf.gz"
-```
+To measure accuracy we need people whose full genome we know but whom the panel has never seen. We take 100 of
+them out of the panel (20 per continental group, none with a parent or child in 1000 Genomes), keep their 30x
+genotypes as the truth, and give the imputation only what a genotyping chip would read.
 
-1.3.4 Duplicate ID removal
-Remove duplicate IDs. If you wish to preserve all multiallelic sites, replace the ID column with a unique ID e.g. CHR_POS_REF_ALT (as indicated in Step 1.3.2). 
+[`test_samples.txt`](test_samples.txt) lists the 100 people.
 
-Here, 1000GP did not contain multiallelic sites after AC filtering, and thus, RSIDs were preserved in the ID column. And since RSIDs are not always unique, duplicates should be removed.
+```bash
+mkdir -p work
+IN=data/1kGP_high_coverage_Illumina.chr22.filtered.SNV_INDEL_SV_phased_panel.vcf.gz
 
-```
-for CHR in {1..23}; do
-    bcftools query -f '%ID\n' 1000GP_chr${CHR}.vcf.gz | \
-    sort | uniq -d > 1000GP_chr${CHR}.dup_id
+# Panel: everyone else, biallelic SNPs and indels, sites still polymorphic without the 100
+bcftools view -S ^test_samples.txt -v snps,indels -m2 -M2 "$IN" -Ou |
+  bcftools view -c1 -Oz -o work/panel.chr22.vcf.gz
+bcftools index -t work/panel.chr22.vcf.gz
 
-    if [[ -s 1000GP_chr${CHR}.dup_id ]]; then
-    	bcftools view -e ID=@1000GP_chr${CHR}.dup_id \
-    	1000GP_chr${CHR}.vcf.gz \
-        -Oz -o 1000GP_filtered_chr${CHR}.vcf.gz
-    else 
-    	mv 1000GP_chr${CHR}.vcf.gz \
-        1000GP_filtered_chr${CHR}.vcf.gz
-    fi
-done
-```
-1.3.5 Reference panel allele frequencies
-Generate a tab-delimited file of the reference panel allele frequencies, one variant per line, with columns CHR, SNP (in format CHR_POS_REF_ALT), REF, ALT, AF (including the header line).
+# Truth: the 100 people at every site
+bcftools view -S test_samples.txt -v snps,indels -m2 -M2 "$IN" -Oz -o work/truth.chr22.vcf.gz
+bcftools index -t work/truth.chr22.vcf.gz
 
-First, update (or add) AF values in the INFO field, calculate it with BCFtools plugin +fill-tags:
-```
-# Check if the VCF does NOT contain AF in the INFO field,
-# and calculate it with bcftools +fill-tags plugin
-
-for CHR in {1..23}; do
-    bcftools +fill-tags \
-        1000GP_filtered_chr${CHR}.vcf.gz \
-        -Oz -o 1000GP_AF_chr${CHR}.vcf.gz -- -t AF
-done
-```
-Extract the wanted fields from each VCF file and combine as a single output file with the header:
-
-```
-# Generate a tab-delimited header
-echo -e 'CHR\tSNP\tREF\tALT\tAF' \
-    > 1000GP_imputation_all.frq
-
-# Query the required fields from the VCF file 
-# and append to the allele frequency file 
-for CHR in {1..23}; do
-    bcftools query \
-    -f '%CHROM\t%CHROM\_%POS\_%REF\_%ALT\t%REF\t%ALT\t%INFO/AF\n' \
-    1000GP_AF_chr${CHR}.vcf.gz \
-    >> 1000GP_imputation_all.frq
-done
-```
-Note: Chromosome notation in the panel.frq file should follow the GRCh38/hg38 notations ('chr#' for autosomal chromosomes and 'chrX' for chromosome 23).
- 
-
-
-1.3.6 Create binary reference panel files
-The phased reference panel files per chromosome are required in bref format (bref = binary reference). For more information, see Beagle documentation at Beagle site:
-https://faculty.washington.edu/browning/beagle/bref.16Dec15.pdf.
- 
-The required bref.*.jar is downloaded from Beagle site:
-```
-wget https://faculty.washington.edu/browning/beagle/bref.27Jan18.7e1.jar
-```
-Use the processed imputation reference panel VCFs as inputs for the example command below. 
-The output files have the suffix '.bref' instead of '.vcf.gz'.
-```
-# Convert each file to bref format
-for CHR in {1..23}; do
-    java -jar /path/to/bref.27Jan18.7e1.jar \
-        1000GP_AF_chr${CHR}.vcf.gz
-done
+# Array: common SNPs (MAF >= 1%), at most one every 5 kb, genotypes unphased as a chip reports them
+bcftools view -v snps -q 0.01:minor work/panel.chr22.vcf.gz -Ou |
+  bcftools query -f '%CHROM\t%POS\n' |
+  awk 'BEGIN{OFS="\t"} $2 >= last + 5000 {print; last = $2}' > work/array_sites.chr22.tsv
+bcftools view -T work/array_sites.chr22.tsv work/truth.chr22.vcf.gz -Ou |
+  bcftools +setGT -Ou - -- -t a -n u |
+  bcftools annotate -x INFO -Oz -o work/array.chr22.vcf.gz
+bcftools index -t work/array.chr22.vcf.gz
 ```
 
-1.3.7 Generate a list of the reference panel sample IDs
-List of sample IDs present in the reference panel, one line per sample ID can be generated from any of the VCF files as in the example below (assuming that all chromosomes contain the same set of samples):
+What you should see (`bcftools index -n`, `bcftools query -l | wc -l`):
+
+```text
+panel    3102 people    1064451 sites
+truth     100 people    1065095 sites
+array     100 people       7216 sites
 ```
-bcftools query -l 1000GP_AF_chr22.vcf.gz \
-    > 1000GP_sample_IDs.txt
+
+## 4. Convert the panel to bref3
+
+bref3 is Beagle's compressed panel format. It is built once and makes every run after it faster.
+
+```bash
+java -jar tools/bref3.27Feb25.75f.jar work/panel.chr22.vcf.gz > work/panel.chr22.bref3
 ```
-1.4. You are ready to start! 
-As the last prepatory step, let's go over the required input data file(s) and also expected final output files!
- 
-1.4.1 Input file:
- 
-Post-QC chip genotype data in VCFv4.2 format and chrX genotypes as diploid genotypes:
-DATASET.vcf.gz
- 
-Note: Chromosome notation should follow the GRCh38/hg38 notations (e.g. 'chr#' for autosomal chromosomes, 'chrX', 'chrY' and 'chrM').
 
-Note: If the input data was lifted over from an older genome build to build version 38, cautious inspection of the data is highly recommended before proceeding with the protocol.
+The 445 MB panel VCF becomes a 196 MB `panel.chr22.bref3`.
 
-Note: If chrX is represented as haploid genotypes, follow step 1.3.3 first 'bcftools +fixploidy' command (not the other two piped commands) to convert to diploid genotypes.
- 
- 
-1.4.2 Final output files:
-DATASET_imputed_info_chr#.vcf.gz (where # is chromosome number)
-DATASET_postimputation_summary_plots.pdf
+## 5. Phase and impute
 
-Note: Several intermediate files are created during the protocol. Those files can be used for troubleshooting and deleted once the successful imputation is confirmed.
+Beagle 5 phases and imputes in one run. `gt=` is the target, `ref=` the panel, `map=` the genetic map.
 
+```bash
+mkdir -p results
+java -Xmx16g -jar tools/beagle.27Feb25.75f.jar \
+  gt=work/array.chr22.vcf.gz ref=work/panel.chr22.bref3 map="$MAP" \
+  out=results/beagle.chr22 nthreads=16
+bcftools index -t results/beagle.chr22.vcf.gz
+```
 
+What you should see at the end of `results/beagle.chr22.log`:
 
+```text
+Reference samples:                3,102
+Study     samples:                  100
+...
+Imputation time:               3 seconds
+```
+
+The whole command took 13.4 seconds and 4.9 GB of memory (the Java process, with `-Xmx16g`) on 16 threads,
+median of three runs measured with `/usr/bin/time`.
+
+Useful options: `gp=true` adds genotype probabilities, `ap=true` the per-haplotype ALT probabilities,
+`impute=false` only phases. `-Xmx` must be large enough for the panel; with too little Beagle stops with an
+out-of-memory error.
+
+## 6. Read the output
+
+```bash
+# one imputed site and one chip site, first person only
+bcftools view -H -i 'INFO/IMP=1 && INFO/AF>0.2' results/beagle.chr22.vcf.gz | head -1 | cut -f1-10
+bcftools view -H -e 'INFO/IMP=1' results/beagle.chr22.vcf.gz | head -1 | cut -f1-10
+```
+
+```text
+chr22  10562747  22:10562747:AGTTTT:A  AGTTTT  A  .  PASS  DR2=0.36;AF=0.2799;IMP  GT:DS  0|0:0.21
+chr22  10519276  22:10519276:G:C       G       C  .  PASS  DR2=1;AF=0.025         GT:DS  0|0:0
+```
+
+- `GT` is phased (`0|1`): the first allele is on one parental haplotype, the second on the other.
+- `DS` is the dosage, the expected number of ALT alleles (0 to 2).
+- `INFO/DR2` is the estimated squared correlation between the imputed dosage and the true genotype.
+  `DR2 < 0.3` is the usual filter for poorly imputed sites.
+- `INFO/IMP` marks imputed sites; sites without it were on the array.
+
+Keep only well-imputed sites:
+
+```bash
+bcftools view -i 'INFO/DR2>=0.3' results/beagle.chr22.vcf.gz -Oz -o results/beagle.chr22.dr2.vcf.gz
+```
+
+## 7. Check the accuracy
+
+We compare the imputed dosages with the 30x truth, on imputed sites only (the array sites are left out), and
+report the squared correlation r² by minor allele frequency. The scorer is in Selphi 2 and works on any
+imputed VCF (see [its tutorial](https://github.com/adrianodemarino/Imputation_selphi2_tutorial#install)):
+
+```bash
+selphi --evaluate results/beagle.chr22.vcf.gz --truth work/truth.chr22.vcf.gz \
+  --exclude-sites work/array.chr22.vcf.gz --out results/beagle.eval
+```
+
+```text
+MAF bin                N variants    Mean R²  Concordance
+------------------------------------------------------------
+0.5-1%                     133440     0.4849       0.9927
+1-2%                        75037     0.5559       0.9862
+2-5%                        59848     0.6604       0.9753
+5-10%                       33375     0.7302       0.9548
+10-20%                      32447     0.7539       0.9231
+20-50%                      59375     0.7997       0.8928
+
+Per-sample (n=100):
+  R²:          mean=0.893349, min=0.838404, max=0.953355
+```
+
+r² by frequency bin is the squared correlation, over all sites in the bin, between imputed dosage and true
+genotype. The bins start at 0.5% because 100 people carry 200 copies of chr22. Selphi 2 scores higher in every
+bin on the same data; the [Selphi 2 tutorial](https://github.com/adrianodemarino/Imputation_selphi2_tutorial#step-4-compare-with-beagle)
+has the side-by-side.
+
+Rare variants are where imputation struggles: a site carried by a handful of people in the panel can only
+be imputed when the target shares a long stretch of haplotype with one of them.
+
+## 8. Your own data
+
+Before imputing your own genotypes:
+
+- **Same build and chromosome names** in target, panel and map (`chr22` vs `22`). Rename with
+  `bcftools annotate --rename-chrs`. Data lifted over from GRCh37 needs a careful check.
+- **Same strand and alleles.** Arrays often report the other strand. Normalise against the reference genome:
+  `bcftools norm -f GRCh38.fa -c ws` fixes swapped REF/ALT, and drop palindromic A/T and C/G SNPs if you are
+  not sure of the strand.
+- **Biallelic records.** Split multiallelic sites with `bcftools norm -m -any`.
+- **Sample QC first.** Remove samples and sites with a high missing rate, and sites far from Hardy-Weinberg
+  equilibrium, before imputing.
+- **One chromosome per run**, or pass `chrom=chr22` to pick one.
+- **A panel close to your people.** Accuracy depends more on the panel than on the tool: the larger and the
+  closer to your population, the better.
+
+## Citation
+
+Browning BL, Tian X, Zhou Y, Browning SR. Fast two-stage phasing of large-scale sequence data.
+*Am J Hum Genet* 2021;108:1880-1890.
+
+Byrska-Bishop M et al. High-coverage whole-genome sequencing of the expanded 1000 Genomes Project cohort
+including 602 trios. *Cell* 2022;185:3426-3440.
